@@ -1,0 +1,8 @@
+build
+*.pyc
+*.pyo
+*.tmp*
+*.orig
+*.komodoproject
+cover
+.coverage
