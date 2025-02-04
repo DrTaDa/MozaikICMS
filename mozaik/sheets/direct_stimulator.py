@@ -310,7 +310,7 @@ class Depolarization(DirectStimulator):
     current : float (mA)
                      The current to inject into neurons.
 
-    population_selector : ParameterSet
+    population_selector : ParemeterSet
                         Defines the population selector and its parameters to specify to which neurons in the population the 
                         background activity should be applied. 
                      
@@ -319,10 +319,10 @@ class Depolarization(DirectStimulator):
     
     Currently the mpi_safe version only works in nest!
     """
-    
-    
+ 
     required_parameters = ParameterSet({
             'current': float,
+            'onset' : float,
             'population_selector' : ParameterSet({
                     'component' : str,
                     'params' : ParameterSet
@@ -333,19 +333,20 @@ class Depolarization(DirectStimulator):
         
     def __init__(self, sheet, parameters):
         DirectStimulator.__init__(self, sheet,parameters)
-        
+
         population_selector = load_component(self.parameters.population_selector.component)
         ids = population_selector(sheet,self.parameters.population_selector.params).generate_idd_list_of_neurons()
         d = dict((j,i) for i,j in enumerate(self.sheet.pop.all_cells))
         to_stimulate_indexes = [d[i] for i in ids]
         
         self.scs = self.sheet.sim.StepCurrentSource(times=[0.0], amplitudes=[0.0])
+
         for i in to_stimulate_indexes:
             self.sheet.pop.all_cells[i].inject(self.scs)
 
     def prepare_stimulation(self,duration,offset):
-        self.scs.set_parameters(times=[offset+self.sheet.dt*3], amplitudes=[self.parameters.current],copy=False)
-
+        self.scs.set_parameters(times=[offset+self.parameters.onset+self.sheet.dt*3], amplitudes=[self.parameters.current],copy=False)
+        
     def inactivate(self,offset):
         self.scs.set_parameters(times=[offset+self.sheet.dt*3], amplitudes=[0.0],copy=False)
 
@@ -986,10 +987,6 @@ def single_pixel(sheet, coor_x, coor_y, update_interval, parameters):
     return signals
 
 
-def lorentzien(amp, distance, a=0.01437, b=0.7253, c=776.7, d=1.283):
-    return a * (amp ** b) / (1 + (distance/c)**d)
-
-
 class IntraCorticalMicroStimulation(DirectStimulator):
     """
     This class instantiates a multi-electrode array using the
@@ -1049,9 +1046,6 @@ class IntraCorticalMicroStimulation(DirectStimulator):
         self.instantiate_activation_distributions()
         self.select_stimulated_cells()
 
-        #self.rank = MPI.COMM_WORLD.Get_rank()
-        #logger.info(f"ICMS initialized on MPI ranked {self.rank}")
-
     def instantiate_probe(self):
         """Instantiate a probe based on its description. Please refer to
         https://probeinterface.readthedocs.io/en/main/format_spec.html for the
@@ -1075,14 +1069,13 @@ class IntraCorticalMicroStimulation(DirectStimulator):
         with open(self.parameters.activation_distributions_path, "rb") as fp:
             self.activation_distribution = numpy.array(pickle.load(fp)[self.sheet.name])
 
-        # Fitted on Elche's data
-        # The factor 1000 is to go from nA to uA.
-        norm_factor = self.parameters.distance_scaler_a / (self.parameters.amplitude / 1000.)**self.parameters.distance_scaler_b - self.parameters.distance_scaler_c
+        # The distance scaler are Fitted on Elche's data
+        norm_factor = self.parameters.distance_scaler_a / self.parameters.amplitude**self.parameters.distance_scaler_b + self.parameters.distance_scaler_c
         
-        if norm_factor < 1.:
-            logger.warning("ICMS: norm_factor is <1, set to 1 instead.")
-            norm_factor = 1.
-
+        if norm_factor < 0.01:
+            logger.warning("ICMS: norm_factor is <0.01, setting it to 0.01 instead.")
+            norm_factor = 0.01
+        
         self.activation_distribution[1, :] /= norm_factor
 
         logger.info(
@@ -1151,7 +1144,7 @@ class IntraCorticalMicroStimulation(DirectStimulator):
                 ISIs.append(ICMS_ISI)
             else:
                 ISIs.append(0)
-        #if self.rank == 0:
+
         self.sheet.pop.set(microstimulation_ISI=ISIs)
         logger.info(
             f"ICMS: starting stimulation at frequency {self.parameters.frequency}Hz (ISI of {ICMS_ISI}ms)."
@@ -1168,14 +1161,13 @@ class IntraCorticalMicroStimulation(DirectStimulator):
 
         Note that a subsequent call to prepare_stimulation should 'activate' the stimulator again.
         """
-        #if self.rank == 0:
+
         self.sheet.pop.set(microstimulation_ISI=0)
         logger.info(f"ICMS: ending stimulation.")
 
     def save_to_datastore(self, data_store, stimulus):
         """Stores the electrode positions and the list of cells activated by each electrode"""
         
-        #if self.rank == 0:
         active_electrode = '_'.join(str(e) for e in self.parameters.probe_active_electrodes)
         metadata = f"__{self.parameters.amplitude}__{self.parameters.frequency}__{active_electrode}"
 
