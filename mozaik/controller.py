@@ -134,10 +134,10 @@ def prepare_workflow(simulation_name, model_class):
     ddir = result_directory_name(simulation_run_name, simulation_name, modified_parameters)
 
     if mozaik.mpi_comm and mozaik.mpi_comm.rank != mozaik.MPI_ROOT:
-        Global.root_directory = parameters.results_dir + ddir[:100] + '/' + str(mozaik.mpi_comm.rank) + '/'
+        Global.root_directory = parameters.results_dir + ddir[:150] + '/' + str(mozaik.mpi_comm.rank) + '/'
         mozaik.mpi_comm.barrier()
     else:
-        Global.root_directory = parameters.results_dir + ddir[:100] + '/'
+        Global.root_directory = parameters.results_dir + ddir[:150] + '/'
 
     os.makedirs(Global.root_directory)
     if mozaik.mpi_comm and mozaik.mpi_comm.rank == mozaik.MPI_ROOT:

@@ -1031,12 +1031,17 @@ class IntraCorticalMicroStimulation(DirectStimulator):
         "probe_active_electrodes": list,
         "distance_scaler_a": float,
         "distance_scaler_b": float,
-        "distance_scaler_c": float
+        "distance_scaler_c": float,
+        "stimulator_seed": int
     })
 
     def __init__(self, sheet, parameters):
         """Init"""
         DirectStimulator.__init__(self, sheet, parameters)
+
+        # ICMS specific random generator. This is used to make sure that the same cells
+        # are selected to be stimulated between runs that use the same electrode(s) and amplitude.
+        self.rng = numpy.random.default_rng(self.parameters.stimulator_seed)
 
         self.probe = None
         self.stimulated_cells = {}
@@ -1101,9 +1106,11 @@ class IntraCorticalMicroStimulation(DirectStimulator):
 
         # Find out which part of the discret distribution each distance belongs to, and draw
         # at random which are getting activated or not.
-        _mask = numpy.digitize(cells_contact_distances, self.activation_distribution[0]) - 1
-        _mask = numpy.random.random(_mask.shape) < self.activation_distribution[1][_mask]
-    
+        _idx_distribution = numpy.digitize(cells_contact_distances, self.activation_distribution[0]) - 1
+        _mask = self.rng.random(_idx_distribution.shape) < self.activation_distribution[1][_idx_distribution]
+        # _mask = numpy.digitize(cells_contact_distances, self.activation_distribution[0]) - 1
+        # _mask = numpy.random.random(_mask.shape) < self.activation_distribution[1][_mask]
+
         # Only keep the active electrodes
         for j in range(len(electrodes_positions)):
             if j not in self.parameters.probe_active_electrodes:
@@ -1242,3 +1249,4 @@ class IntraCorticalMicroStimulation(DirectStimulator):
                 ax.set_zlabel('Z')
 
                 plt.savefig(f"probes_and_cells_{i}_distances.pdf")
+                plt.close(fig)
