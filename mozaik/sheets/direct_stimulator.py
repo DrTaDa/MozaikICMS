@@ -1054,7 +1054,7 @@ class IntraCorticalMicroStimulation(DirectStimulator):
     def instantiate_probe(self):
         """Instantiate a probe based on its description. Please refer to
         https://probeinterface.readthedocs.io/en/main/format_spec.html for the
-        descrption file format."""
+        description file format."""
 
         self.probe = read_prb(self.parameters.probe_path).probes[0]
         self.probe = self.probe.to_3d(axes=self.parameters.probe_2d_planes)
@@ -1069,67 +1069,77 @@ class IntraCorticalMicroStimulation(DirectStimulator):
         if any(self.parameters.probe_position_offest):
             self.probe.move(translation_vector=self.parameters.probe_position_offest)
 
-    def instantiate_activation_distributions(self):
-
-        with open(self.parameters.activation_distributions_path, "rb") as fp:
-            self.activation_distribution = numpy.array(pickle.load(fp)[self.sheet.name])
-
-        # The distance scaler are Fitted on Elche's data
-        norm_factor = self.parameters.distance_scaler_a / self.parameters.amplitude**self.parameters.distance_scaler_b + self.parameters.distance_scaler_c
-        
-        if norm_factor < 0.01:
-            logger.warning("ICMS: norm_factor is <0.01, setting it to 0.01 instead.")
-            norm_factor = 0.01
-        
-        self.activation_distribution[1, :] /= norm_factor
-
-        logger.info(
-            f"ICMS: reading activation distribution for population {self.sheet.name}. " +
-            f"Stimulating current amplitude: {self.parameters.amplitude / 1000}uA. " +
-            f"Distribution scaling factor: {norm_factor}"
-        )
-
     def select_stimulated_cells(self):
         """For each electrode of the multi-electrode array, select a subset of neurons
         that get activate by the electrode. The selection is based on the distance
-        between the electrode and the neurons."""
+        between the electrode and the neurons.
+
+        The selection process also ensures that for a given seed, the set of cells
+        activated at a higher amplitude is a superset of the cells activated at lower
+        amplitudes.
+        """
+
+        # Get the pre-computer activation_distribution
+        with open(self.parameters.activation_distributions_path, "rb") as fp:
+            self.activation_distribution = numpy.array(pickle.load(fp)[self.sheet.name])
 
         # Get the positions of the neurons
         cells_positions = self.sheet.pop.positions.T
         cells_positions = [list(self.sheet.vf_2_cs(cp[0], cp[1])) + [cp[2]] for cp in cells_positions]
+        n_cells = len(cells_positions)
 
         # Get the positions of the electrodes
         electrodes_positions = self.probe.contact_positions
+        n_electrodes = len(electrodes_positions)
 
         # Compute the distance between each neuron and each electrode
         cells_contact_distances = cdist(numpy.array(cells_positions), numpy.array(electrodes_positions))
 
-        # Find out which part of the discret distribution each distance belongs to, and draw
-        # at random which are getting activated or not.
+        # Assign a fixed random activation propensity score to each cell-electrode pair
+        # This propensity is a phenomenological representation of how close the 
+        # axon of a neuron passes by each electrode.
+        random_propensities = self.rng.random(size=(n_cells, n_electrodes))
+
+        # Calculate amplitude-dependent activation probabilities
         _idx_distribution = numpy.digitize(cells_contact_distances, self.activation_distribution[0]) - 1
-        _mask = self.rng.random(_idx_distribution.shape) < self.activation_distribution[1][_idx_distribution]
-        # _mask = numpy.digitize(cells_contact_distances, self.activation_distribution[0]) - 1
-        # _mask = numpy.random.random(_mask.shape) < self.activation_distribution[1][_mask]
+        _idx_distribution = numpy.clip(_idx_distribution, 0, len(self.activation_distribution[1]) - 1)
+
+        # Get the base probabilities corresponding to the distances
+        base_probabilities = self.activation_distribution[1][_idx_distribution]
+
+        # Calculate the amplitude-specific scaling factor
+        # The parameter are fitted on Elche's single pulse data
+        norm_factor = self.parameters.distance_scaler_a / self.parameters.amplitude**self.parameters.distance_scaler_b + self.parameters.distance_scaler_c
+        if norm_factor < 0.01:
+            norm_factor = 0.01
+
+        if norm_factor == 0:
+             scaled_probabilities = numpy.zeros_like(base_probabilities)
+        else:
+             # This calculates the probability P(activate | distance, current_amplitude)
+             scaled_probabilities = base_probabilities / norm_factor
+
+        # Compare the fixed random score with the amplitude-dependent probability
+        # Activate if random_propensity < P(activate | distance, current_amplitude)
+        _mask = random_propensities < scaled_probabilities
 
         # Only keep the active electrodes
-        for j in range(len(electrodes_positions)):
+        for j in range(n_electrodes):
             if j not in self.parameters.probe_active_electrodes:
                 _mask[:, j] = False
-            else:
-                logger.info(
-                    f"ICMS: in population {self.sheet.name}, min distance {numpy.min(cells_contact_distances[:, j])}," +
-                    f" max distance {numpy.max(cells_contact_distances[:, j])}, mean distance {numpy.mean(cells_contact_distances[:, j])}"
-                )
 
+        # Build the dictionary of stimulated cells
         self.stimulated_cells = {}
         for i, cell_id in enumerate(self.sheet.pop.all_cells):
-            # If any electrode activates a cell, add it to the list of stimulated cells
-            _idx_electrodes = np.nonzero(_mask[i, :])[0]
+            # If any *active* electrode activates a cell, add it to the list
+            _idx_electrodes = numpy.nonzero(_mask[i, :])[0]
             if len(_idx_electrodes):
                 self.stimulated_cells[cell_id] = _idx_electrodes
+
         logger.info(
-            f"ICMS: in population {self.sheet.name}, activating {len(self.stimulated_cells)} cells " +
-            f"({100 * len(self.stimulated_cells) / len(cells_positions):.2f}% of the population)."
+             f"ICMS: in population {self.sheet.name}, activating {len(self.stimulated_cells)} cells " +
+             f"({100 * len(self.stimulated_cells) / n_cells:.2f}% of the population) " +
+             f"at amplitude {self.parameters.amplitude}."
         )
 
     def prepare_stimulation(self, duration, offset):
