@@ -995,30 +995,12 @@ class IntraCorticalMicroStimulation(DirectStimulator):
     the electrode.
     Note that a neuron can be part of the selected population of multiple electrodes.
 
-    Parameters
-    ----------
-
-    Other parameters
-    ----------------
-
-    Notes
-    -----
-    The distribution of activated neurons is fitted using somatic
-    activation density data from:
-    "Stoney vs. Histed: Quantifying the spatial effects of intracortical
-    microstimulation, K. Kumaravelu et al., 2022".
-    The amplitude versus spike rate is fitted using data from:
-    "Neural mechanisms of the temporal response of cortical neurons to
-    intracortical microstimulation, K. Kumaravelu et al., 2024".
-
     For now this is not mpi optimize NOR TO BE USED WITH MPI.
     """
 
     required_parameters = ParameterSet({
         'amplitude': float,
         'frequency': float,
-        'update_interval': float,
-        'stimulation_duration': float,
         "activation_distributions_path": str,
         "probe_path": str,
         "probe_position_offset": list,
