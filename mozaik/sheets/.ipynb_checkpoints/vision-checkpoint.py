@@ -251,6 +251,7 @@ class VisualCorticalUniformSheet3D(VisualCorticalUniformSheet):
                 ('tau_syn_E',  'tau_syn_exc'),
                 ('tau_syn_I',  'tau_syn_inh'),
             )
+            celltype.units['w'] = "pA"
             celltype.units['v'] = "mV"
             celltype.units['gsyn_exc'] = "nS"
             celltype.units['gsyn_inh'] = "nS"

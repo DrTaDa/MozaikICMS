@@ -1083,12 +1083,10 @@ class IntraCorticalMicroStimulation(DirectStimulator):
         _idx_distribution = numpy.clip(_idx_distribution, 0, len(self.activation_distribution[1]) - 1)
 
         # Calculate the amplitude-specific scaling factor
-        # The parameter are fitted on Elche's single pulse data
         if "Inh" in self.sheet.name:
-            recruitment_gain = self.recruitment_gain_inh
+            recruitment_gain = self.parameters.recruitment_gain_inh
         else:
-            recruitment_gain = self.recruitment_gain_exc
-
+            recruitment_gain = self.parameters.recruitment_gain_exc
         recruitment_rescale = numpy.sqrt(numpy.clip(
             recruitment_gain * (self.parameters.amplitude - self.parameters.recruitment_offset),
             0,
