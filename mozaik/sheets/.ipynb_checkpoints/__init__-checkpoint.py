@@ -252,23 +252,18 @@ class Sheet(BaseComponent):
                 The segment holding all the recorded data. See NEO documentation for detail on the format.
         """
 
-        try:
-            if self.parameters.cell.native_nest:
-                block = self.pop.get_data(['spikes', 'v', 'g_exc', 'g_inh', 'gsyn_exc', 'gsyn_inh'], clear=True)
-            else:
-                block = self.pop.get_data(['spikes', 'v', 'g_exc', 'g_inh', 'gsyn_exc', 'gsyn_inh'], clear=True)
-        except (NothingToWriteError, errmsg):
-            logger.debug(errmsg)
+        if self.parameters.cell.native_nest:
+            block = self.pop.get_data(['spikes', 'v', 'g_exc', 'g_inh', 'gsyn_exc', 'gsyn_inh', 'k_trace', 'w'], clear=True)
+        else:
+            block = self.pop.get_data(['spikes', 'v', 'g_exc', 'g_inh', 'gsyn_exc', 'gsyn_inh', 'k_trace', 'w'], clear=True)
 
         if (mozaik.mpi_comm) and (mozaik.mpi_comm.rank != mozaik.MPI_ROOT):
            return None
         s = block.segments[-1]
         s.annotations["sheet_name"] = self.name
 
-        print("ANALOG SIGNAL")
         for a in s.analogsignals:
-            print("BLA: ", a.name)
-        print("END SIGNAL")
+            print("Analog signals present: ", a.name)
 
         # lets sort spike train so that it is ordered by IDs and thus hopefully
         # population indexes

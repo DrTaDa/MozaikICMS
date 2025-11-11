@@ -201,8 +201,7 @@ class Sheet(BaseComponent):
         if not self._pop:
             logger.error('Population has not been yet set in sheet: ' + self.name + '!')
         if key not in self._neuron_annotations[neuron_number]:
-            logger.error("ERROR, annotation does not exist:" + self.name + " " + neuron_number + " " + key + " " + self._neuron_annotations[neuron_number].keys())
-
+            logger.error(f"ERROR, annotation does not exist: sheet='{self.name}', neuron_number={neuron_number}, key='{key}', available_keys={list(self._neuron_annotations[neuron_number].keys())}")
         return self._neuron_annotations[neuron_number][key][1]
 
     def get_neuron_annotations(self):
@@ -253,9 +252,9 @@ class Sheet(BaseComponent):
         """
 
         if self.parameters.cell.native_nest:
-            block = self.pop.get_data(['spikes', 'v', 'w', 'g_exc', 'g_inh', 'gsyn_exc', 'gsyn_inh'], clear=True)
+            block = self.pop.get_data(['spikes', 'v', 'g_exc', 'g_inh', 'gsyn_exc', 'gsyn_inh', 'k_trace', 'w'], clear=True)
         else:
-            block = self.pop.get_data(['spikes', 'v', 'w', 'g_exc', 'g_inh', 'gsyn_exc', 'gsyn_inh'], clear=True)
+            block = self.pop.get_data(['spikes', 'v', 'g_exc', 'g_inh', 'gsyn_exc', 'gsyn_inh', 'k_trace', 'w'], clear=True)
 
         if (mozaik.mpi_comm) and (mozaik.mpi_comm.rank != mozaik.MPI_ROOT):
            return None

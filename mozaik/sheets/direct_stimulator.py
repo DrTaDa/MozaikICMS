@@ -29,6 +29,7 @@ import quantities as qt
 import scipy.interpolate
 from scipy.integrate import odeint
 from scipy.spatial.distance import cdist
+from scipy import signal
 from mpi4py import MPI
 
 import mozaik
@@ -988,8 +989,7 @@ def single_pixel(sheet, coor_x, coor_y, update_interval, parameters):
 
 
 class IntraCorticalMicroStimulation(DirectStimulator):
-    """
-    This class instantiates a multi-electrode array using the
+    """ This class instantiates a multi-electrode array using the
     probeinterface library. For each electrode, a subset of neurons is
     selected at random using a distance dependent distribution centered on
     the electrode.
@@ -1001,7 +1001,7 @@ class IntraCorticalMicroStimulation(DirectStimulator):
     required_parameters = ParameterSet({
         'amplitude': float,
         'frequency': float,
-        "activation_distributions_path": str,
+        "connectivity_profiles_path": str,
         "probe_path": str,
         "probe_position_offset": list,
         "probe_rotation_angle": float,
@@ -1024,7 +1024,6 @@ class IntraCorticalMicroStimulation(DirectStimulator):
 
         self.probe = None
         self.stimulated_cells = {}
-        self.activation_distribution = None
 
         self.instantiate_probe()
         self.select_stimulated_cells()
@@ -1047,6 +1046,66 @@ class IntraCorticalMicroStimulation(DirectStimulator):
         if any(self.parameters.probe_position_offset):
             self.probe.move(translation_vector=self.parameters.probe_position_offset)
 
+    def generate_activation_profile(self):
+        """Generate an activation connection profile, that is, a probability for a cell to be
+        activited as a function of distance. It is computed as the convolution of an axonal activation
+        profile (the probability that an axon gets activated at a given distance from the electrode) and 
+        a pre-computed connectivity profile (the probability that this axon is connected to a cell at a
+        given distance from the electrode).
+
+        Note that this profile is independent of the current amplitude."""
+
+        # Get the pre-computer connectivity profile
+        with open(self.parameters.connectivity_profiles_path, "rb") as fp:
+            connectivity_profile = numpy.array(pickle.load(fp)[self.sheet.name])
+
+        def axonal_activation_profile(distance, a=2.67135221, b=2.17589264, c=0.01009279):
+            """This function gives the density of activated axon as a function of the distance
+            to the stimulated electrode. The parameter a, b and c have been fitted on
+            Kumaravelu et al. (2022) Fig5D"""
+            return a / (np.abs(distance)**b + c)
+
+        # Define the unified grid we will work on
+        max_dist = 4.0 # in mm
+        num_points = 4001
+        distance_axis = np.linspace(-max_dist, max_dist, num_points)
+
+        # Create a symmetric version of the experimental data
+        connect_distances = np.array(connectivity_profile[0]) / 1000. # From mm to um
+        connect_probabilities = np.array(connectivity_profile[2]) #[2]
+        sym_connect_distances = np.concatenate([-connect_distances[:0:-1], connect_distances])
+        sym_connect_probabilities = np.concatenate([connect_probabilities[:0:-1], connect_probabilities])
+
+        # Sort the data for np.interp
+        sort_indices = np.argsort(sym_connect_distances)
+        sorted_distances = sym_connect_distances[sort_indices]
+        sorted_probabilities = sym_connect_probabilities[sort_indices]
+
+        # Interpolate the connection profile onto our uniform grid
+        connection_profile_interpolated = np.interp(
+            distance_axis,
+            sorted_distances,
+            sorted_probabilities
+        )
+
+        # Generate the axonal activation profile for the same grid
+        activation_profile = axonal_activation_profile(distance_axis)
+    
+        # Normalize the kernel such as to redistribute the probabilities without
+        # changing the overall sum of probabilites
+        activation_profile = activation_profile / np.sum(activation_profile)
+
+        # Perform the convolution and normalize it to one
+        convolved_result = signal.convolve(
+            activation_profile,
+            connection_profile_interpolated,
+            mode='same'
+        )
+
+        return [distance_axis[2000:] * 1000.0, convolved_result[2000:]] # Back to um
+        # This is to check the result without the convolution:
+        #return [distance_axis[2000:] * 1000.0, connection_profile_interpolated[2000:] / np.max(connection_profile_interpolated)]
+
     def select_stimulated_cells(self):
         """For each electrode of the multi-electrode array, select a subset of neurons
         that get activate by the electrode. The selection is based on the distance
@@ -1057,10 +1116,9 @@ class IntraCorticalMicroStimulation(DirectStimulator):
         amplitudes.
         """
 
-        # Get the pre-computer activation_distribution
-        with open(self.parameters.activation_distributions_path, "rb") as fp:
-            self.activation_distribution = numpy.array(pickle.load(fp)[self.sheet.name])
-        
+        # Generate the activation profile
+        activation_profile = self.generate_activation_profile()
+
         # Get the positions of the neurons
         cells_positions = self.sheet.pop.positions.T
         cells_positions = [list(self.sheet.vf_2_cs(cp[0], cp[1])) + [cp[2]] for cp in cells_positions]
@@ -1078,11 +1136,11 @@ class IntraCorticalMicroStimulation(DirectStimulator):
         # axon of a neuron passes by each electrode.
         random_propensities = self.rng.random(size=(n_cells, n_electrodes))
 
-        # Calculate amplitude-dependent activation probabilities
-        _idx_distribution = numpy.digitize(cells_contact_distances, self.activation_distribution[0]) - 1
-        _idx_distribution = numpy.clip(_idx_distribution, 0, len(self.activation_distribution[1]) - 1)
+        # Calculate distance-dependent activation probabilities
+        _idx_distribution = numpy.digitize(cells_contact_distances, activation_profile[0]) - 1
+        _idx_distribution = numpy.clip(_idx_distribution, 0, len(activation_profile[1]) - 1)
 
-        # Calculate the amplitude-specific scaling factor
+        # Calculate the amplitude-specific scaling factor, which increases as sqrt(current_amplitude)
         if "Inh" in self.sheet.name:
             recruitment_gain = self.parameters.recruitment_gain_inh
         else:
@@ -1094,7 +1152,7 @@ class IntraCorticalMicroStimulation(DirectStimulator):
         ))
 
         # This calculates the probability P(activate | distance, current_amplitude)
-        scaled_probabilities = self.activation_distribution[1][_idx_distribution] * recruitment_rescale
+        scaled_probabilities = activation_profile[1][_idx_distribution] * recruitment_rescale
 
         # Compare the fixed random score with the amplitude-dependent probability
         # Activate if random_propensity < P(activate | distance, current_amplitude)
@@ -1137,10 +1195,11 @@ class IntraCorticalMicroStimulation(DirectStimulator):
             if cell_id in self.stimulated_cells:
                 ISIs.append(ICMS_ISI)
             else:
-                # An stimulation ISI of 0 means no ICMS-induced spikes
+                # A stimulation ISI of 0 means no ICMS-induced spikes
                 ISIs.append(0)
 
         self.sheet.pop.set(microstimulation_ISI=ISIs)
+        self.sheet.pop.set(k_increment_ICMS=0.1975*self.parameters.amplitude)
         logger.info(
             f"ICMS: starting stimulation at frequency {self.parameters.frequency}Hz (ISI of {ICMS_ISI}ms)."
         )
