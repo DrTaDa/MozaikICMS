@@ -162,7 +162,7 @@ def prepare_workflow(simulation_name, model_class):
     return sim, num_threads, parameters, experiment_parameters
 
 
-def run_workflow(simulation_name, model_class, create_experiments):
+def run_workflow(simulation_name, model_class, create_experiments, save_results=True):
     """
     This is the main function that executes a workflow.
     It expects it gets the simulation, class of the model, and a function that will create_experiments.
@@ -194,7 +194,7 @@ def run_workflow(simulation_name, model_class, create_experiments):
     # Run experiments with previously read parameters on the prepared model
     data_store = run_experiments(model, create_experiments(model, **experiment_parameters), parameters)
 
-    if mozaik.mpi_comm.rank == mozaik.MPI_ROOT:
+    if save_results and mozaik.mpi_comm.rank == mozaik.MPI_ROOT:
         data_store.save()
     import resource
     print("Final memory usage: %iMB" % (resource.getrusage(resource.RUSAGE_SELF).ru_maxrss/(1024)))

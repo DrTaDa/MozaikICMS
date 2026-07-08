@@ -999,8 +999,11 @@ class IntraCorticalMicroStimulation(DirectStimulator):
     """
 
     required_parameters = ParameterSet({
-        'amplitude': float,
-        'frequency': float,
+        "current_amplitude": float,       # uA
+        "pulse_per_train": int,
+        "intertrain_interval": float,     # ms
+        "pulse_frequency": float,         # Hz
+        "k_increment_ICMS_factor": float,
         "connectivity_profiles_path": str,
         "probe_path": str,
         "probe_position_offset": list,
@@ -1049,14 +1052,20 @@ class IntraCorticalMicroStimulation(DirectStimulator):
     def generate_activation_profile(self):
         """Generate an activation connection profile, that is, a probability for a cell to be
         activited as a function of distance. It is computed as the convolution of an axonal activation
-        profile and a pre-computed connectivity profile."""
+        profile (the probability that an axon gets activated at a given distance from the electrode) and 
+        a pre-computed connectivity profile (the probability that this axon is connected to a cell at a
+        given distance from the electrode).
+
+        Note that this profile is independent of the current amplitude."""
 
         # Get the pre-computer connectivity profile
         with open(self.parameters.connectivity_profiles_path, "rb") as fp:
             connectivity_profile = numpy.array(pickle.load(fp)[self.sheet.name])
 
         def axonal_activation_profile(distance, a=2.67135221, b=2.17589264, c=0.01009279):
-            """This function has been fitted on Kumaravelu2022 Fig5.D"""
+            """This function gives the density of activated axon as a function of the distance
+            to the stimulated electrode. The parameter a, b and c have been fitted on
+            Kumaravelu et al. (2022) Fig5D"""
             return a / (np.abs(distance)**b + c)
 
         # Define the unified grid we will work on
@@ -1065,8 +1074,8 @@ class IntraCorticalMicroStimulation(DirectStimulator):
         distance_axis = np.linspace(-max_dist, max_dist, num_points)
 
         # Create a symmetric version of the experimental data
-        connect_distances = np.array(connectivity_profile[0]) / 1000.
-        connect_probabilities = np.array(connectivity_profile[1])
+        connect_distances = np.array(connectivity_profile[0]) / 1000. # From mm to um
+        connect_probabilities = np.array(connectivity_profile[2]) #[2]
         sym_connect_distances = np.concatenate([-connect_distances[:0:-1], connect_distances])
         sym_connect_probabilities = np.concatenate([connect_probabilities[:0:-1], connect_probabilities])
 
@@ -1084,6 +1093,10 @@ class IntraCorticalMicroStimulation(DirectStimulator):
 
         # Generate the axonal activation profile for the same grid
         activation_profile = axonal_activation_profile(distance_axis)
+    
+        # Normalize the kernel such as to redistribute the probabilities without
+        # changing the overall sum of probabilites
+        activation_profile = activation_profile / np.sum(activation_profile)
 
         # Perform the convolution and normalize it to one
         convolved_result = signal.convolve(
@@ -1091,9 +1104,10 @@ class IntraCorticalMicroStimulation(DirectStimulator):
             connection_profile_interpolated,
             mode='same'
         )
-        convolved_result = convolved_result / np.max(convolved_result)
 
-        return [distance_axis[2000:] * 1000.0, convolved_result[2000:]]
+        return [distance_axis[2000:] * 1000.0, convolved_result[2000:]] # Back to um
+        # This is to check the result without the convolution:
+        #return [distance_axis[2000:] * 1000.0, connection_profile_interpolated[2000:] / np.max(connection_profile_interpolated)]
 
     def select_stimulated_cells(self):
         """For each electrode of the multi-electrode array, select a subset of neurons
@@ -1135,7 +1149,7 @@ class IntraCorticalMicroStimulation(DirectStimulator):
         else:
             recruitment_gain = self.parameters.recruitment_gain_exc
         recruitment_rescale = numpy.sqrt(numpy.clip(
-            recruitment_gain * (self.parameters.amplitude - self.parameters.recruitment_offset),
+            recruitment_gain * (self.parameters.current_amplitude - self.parameters.recruitment_offset),
             0,
             numpy.inf
         ))
@@ -1163,7 +1177,7 @@ class IntraCorticalMicroStimulation(DirectStimulator):
         logger.info(
              f"ICMS: in population {self.sheet.name}, activating {len(self.stimulated_cells)} cells " +
              f"({100 * len(self.stimulated_cells) / n_cells:.2f}% of the population) " +
-             f"at amplitude {self.parameters.amplitude}."
+             f"at amplitude {self.parameters.current_amplitude}."
         )
 
     def prepare_stimulation(self, duration, offset):
@@ -1178,18 +1192,18 @@ class IntraCorticalMicroStimulation(DirectStimulator):
         offset : double (seconds)
                The current simulator time.
         """
-        ICMS_ISI = 1000. / self.parameters.frequency
-        ISIs = []
-        for cell_id in self.sheet.pop.all_cells:
-            if cell_id in self.stimulated_cells:
-                ISIs.append(ICMS_ISI)
-            else:
-                # A stimulation ISI of 0 means no ICMS-induced spikes
-                ISIs.append(0)
 
-        self.sheet.pop.set(microstimulation_ISI=ISIs)
+        k_increment = self.parameters.k_increment_ICMS_factor * self.parameters.current_amplitude
+        if "Exc" in self.sheet.name:
+            k_increment = 0
+
+        self.sheet.pop.set(pulse_frequency_ICMS=self.parameters.pulse_frequency)
+        self.sheet.pop.set(intertrain_interval_ICMS=self.parameters.intertrain_interval)
+        self.sheet.pop.set(pulse_per_train_ICMS=self.parameters.pulse_per_train)
+        self.sheet.pop.set(k_increment_ICMS=k_increment)
+
         logger.info(
-            f"ICMS: starting stimulation at frequency {self.parameters.frequency}Hz (ISI of {ICMS_ISI}ms)."
+            f"ICMS: starting stimulation at frequency {self.parameters.pulse_frequency}Hz, with an inter-train interval of {self.parameters.intertrain_interval} and {self.parameters.pulse_per_train} pulses per train."
         )
 
     def inactivate(self, offset):
@@ -1211,7 +1225,7 @@ class IntraCorticalMicroStimulation(DirectStimulator):
         """Stores the electrode positions and the list of cells activated by each electrode"""
         
         active_electrode = '_'.join(str(e) for e in self.parameters.probe_active_electrodes)
-        metadata = f"__{self.parameters.amplitude}__{self.parameters.frequency}__{active_electrode}"
+        metadata = f"__{self.parameters.current_amplitude}__{self.parameters.frequency}__{active_electrode}"
 
         electrode_per_cell = [list(el)[0] for el in self.stimulated_cells.values()]
         data_store.full_datastore.add_analysis_result(

@@ -190,13 +190,15 @@ class VisualCorticalUniformSheet(SheetWithMagnificationFactor):
             celltype = self.sim.native_cell_type(self.parameters.cell.model)
             celltype.translations = build_translations(
                 ('tau_syn_E',  'tau_syn_exc'),
-                ('tau_syn_I',  'tau_syn_inh'),
+                ('tau_syn_I',  'tau_syn_inh_a'),
             )
             celltype.units['w'] = "pA"
             celltype.units['v'] = "mV"
             celltype.units['k_trace'] = "mM"
             celltype.units['gsyn_exc'] = "nS"
             celltype.units['gsyn_inh'] = "nS"
+            celltype.units['gsyn_inh_a'] = "nS"
+            celltype.units['gsyn_inh_b'] = "nS"
             print(celltype.recordable)
             print(celltype.units)
             self.pop = self.sim.Population(int(parameters.sx * parameters.sy/1000000 * parameters.density),
@@ -263,13 +265,15 @@ class VisualCorticalUniformSheet3D(VisualCorticalUniformSheet):
             celltype = self.sim.native_cell_type(self.parameters.cell.model)
             celltype.translations = build_translations(
                 ('tau_syn_E',  'tau_syn_exc'),
-                ('tau_syn_I',  'tau_syn_inh'),
+                ('tau_syn_I',  'tau_syn_inh_a'),
             )
             celltype.units['w'] = "pA"
             celltype.units['v'] = "mV"
             celltype.units['k_trace'] = "mM"
             celltype.units['gsyn_exc'] = "nS"
             celltype.units['gsyn_inh'] = "nS"
+            celltype.units['gsyn_inh_a'] = "nS"
+            celltype.units['gsyn_inh_b'] = "nS"
             print(celltype.recordable)
             print(celltype.units)
             self.pop = self.sim.Population(int(parameters.sx * parameters.sy/1000000 * parameters.density),

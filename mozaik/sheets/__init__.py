@@ -252,9 +252,9 @@ class Sheet(BaseComponent):
         """
 
         if self.parameters.cell.native_nest:
-            block = self.pop.get_data(['spikes', 'v', 'g_exc', 'g_inh', 'gsyn_exc', 'gsyn_inh', 'k_trace', 'w'], clear=True)
+            block = self.pop.get_data(['spikes', 'v', 'g_exc', 'g_inh', 'gsyn_inh_a', 'gsyn_inh_b', 'gsyn_exc', 'gsyn_inh', 'k_trace', 'w'], clear=True)
         else:
-            block = self.pop.get_data(['spikes', 'v', 'g_exc', 'g_inh', 'gsyn_exc', 'gsyn_inh', 'k_trace', 'w'], clear=True)
+            block = self.pop.get_data(['spikes', 'v', 'g_exc', 'g_inh', 'gsyn_inh_a', 'gsyn_inh_b', 'gsyn_exc', 'gsyn_inh', 'k_trace', 'w'], clear=True)
 
         if (mozaik.mpi_comm) and (mozaik.mpi_comm.rank != mozaik.MPI_ROOT):
            return None

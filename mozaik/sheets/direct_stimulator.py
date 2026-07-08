@@ -999,8 +999,11 @@ class IntraCorticalMicroStimulation(DirectStimulator):
     """
 
     required_parameters = ParameterSet({
-        'amplitude': float,
-        'frequency': float,
+        "current_amplitude": float,       # uA
+        "pulse_per_train": int,
+        "intertrain_interval": float,     # ms
+        "pulse_frequency": float,         # Hz
+        "k_increment_ICMS_factor": float,
         "connectivity_profiles_path": str,
         "probe_path": str,
         "probe_position_offset": list,
@@ -1024,6 +1027,7 @@ class IntraCorticalMicroStimulation(DirectStimulator):
 
         self.probe = None
         self.stimulated_cells = {}
+        self.random_propensities = None
 
         self.instantiate_probe()
         self.select_stimulated_cells()
@@ -1134,7 +1138,7 @@ class IntraCorticalMicroStimulation(DirectStimulator):
         # Assign a fixed random activation propensity score to each cell-electrode pair
         # This propensity is a phenomenological representation of how close the 
         # axon of a neuron passes by each electrode.
-        random_propensities = self.rng.random(size=(n_cells, n_electrodes))
+        self.random_propensities = self.rng.random(size=(n_cells, n_electrodes))
 
         # Calculate distance-dependent activation probabilities
         _idx_distribution = numpy.digitize(cells_contact_distances, activation_profile[0]) - 1
@@ -1146,7 +1150,7 @@ class IntraCorticalMicroStimulation(DirectStimulator):
         else:
             recruitment_gain = self.parameters.recruitment_gain_exc
         recruitment_rescale = numpy.sqrt(numpy.clip(
-            recruitment_gain * (self.parameters.amplitude - self.parameters.recruitment_offset),
+            recruitment_gain * (self.parameters.current_amplitude - self.parameters.recruitment_offset),
             0,
             numpy.inf
         ))
@@ -1156,7 +1160,7 @@ class IntraCorticalMicroStimulation(DirectStimulator):
 
         # Compare the fixed random score with the amplitude-dependent probability
         # Activate if random_propensity < P(activate | distance, current_amplitude)
-        _mask = random_propensities < scaled_probabilities
+        _mask = self.random_propensities < scaled_probabilities
 
         # Only keep the active electrodes
         for j in range(n_electrodes):
@@ -1174,7 +1178,7 @@ class IntraCorticalMicroStimulation(DirectStimulator):
         logger.info(
              f"ICMS: in population {self.sheet.name}, activating {len(self.stimulated_cells)} cells " +
              f"({100 * len(self.stimulated_cells) / n_cells:.2f}% of the population) " +
-             f"at amplitude {self.parameters.amplitude}."
+             f"at amplitude {self.parameters.current_amplitude}."
         )
 
     def prepare_stimulation(self, duration, offset):
@@ -1189,19 +1193,34 @@ class IntraCorticalMicroStimulation(DirectStimulator):
         offset : double (seconds)
                The current simulator time.
         """
-        ICMS_ISI = 1000. / self.parameters.frequency
+
+        k_increment = self.parameters.k_increment_ICMS_factor * self.parameters.current_amplitude
+        if "Exc" in self.sheet.name:
+            k_increment = 0
+
+        ICMS_ISI = 1000. / self.parameters.pulse_frequency
         ISIs = []
-        for cell_id in self.sheet.pop.all_cells:
+        propensities = []
+        for i, cell_id in enumerate(self.sheet.pop.all_cells):
             if cell_id in self.stimulated_cells:
                 ISIs.append(ICMS_ISI)
+                activating_electrodes = self.stimulated_cells[cell_id]
+                min_random_draw = np.min(self.random_propensities[i, activating_electrodes])
+                # Cells that have lower propensities are more sensitive to K accumulation
+                propensities.append(1.0 - min_random_draw)
             else:
                 # A stimulation ISI of 0 means no ICMS-induced spikes
                 ISIs.append(0)
+                propensities.append(0)
 
-        self.sheet.pop.set(microstimulation_ISI=ISIs)
-        self.sheet.pop.set(k_increment_ICMS=0.1975*self.parameters.amplitude)
+        self.sheet.pop.set(propensity_ICMS=propensities)
+        self.sheet.pop.set(pulse_ISI_ICMS=ISIs)
+        self.sheet.pop.set(intertrain_interval_ICMS=self.parameters.intertrain_interval)
+        self.sheet.pop.set(pulse_per_train_ICMS=self.parameters.pulse_per_train)
+        self.sheet.pop.set(k_increment_ICMS=k_increment)
+
         logger.info(
-            f"ICMS: starting stimulation at frequency {self.parameters.frequency}Hz (ISI of {ICMS_ISI}ms)."
+            f"ICMS: starting stimulation at frequency {self.parameters.pulse_frequency}Hz, with an inter-train interval of {self.parameters.intertrain_interval} and {self.parameters.pulse_per_train} pulses per train."
         )
 
     def inactivate(self, offset):
@@ -1215,15 +1234,17 @@ class IntraCorticalMicroStimulation(DirectStimulator):
 
         Note that a subsequent call to prepare_stimulation should 'activate' the stimulator again.
         """
-
-        self.sheet.pop.set(microstimulation_ISI=0)
+        self.sheet.pop.set(pulse_ISI_ICMS=0)
+        self.sheet.pop.set(intertrain_interval_ICMS=0)
+        self.sheet.pop.set(pulse_per_train_ICMS=0)
+        self.sheet.pop.set(k_increment_ICMS=0)
         logger.info(f"ICMS: ending stimulation.")
 
     def save_to_datastore(self, data_store, stimulus):
         """Stores the electrode positions and the list of cells activated by each electrode"""
         
         active_electrode = '_'.join(str(e) for e in self.parameters.probe_active_electrodes)
-        metadata = f"__{self.parameters.amplitude}__{self.parameters.frequency}__{active_electrode}"
+        metadata = f"__{self.parameters.current_amplitude}__{self.parameters.pulse_frequency}__{active_electrode}"
 
         electrode_per_cell = [list(el)[0] for el in self.stimulated_cells.values()]
         data_store.full_datastore.add_analysis_result(
